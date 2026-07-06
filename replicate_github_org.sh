@@ -2,7 +2,9 @@
 #
 # Full-fidelity GitHub org replication using GitHub Enterprise Importer (GEI).
 # Migrates ALL repos (including archived), all metadata GEI supports, and LFS.
-# Source org is never modified or deleted — this creates copies in the target org.
+# Cross-account: requires one PAT with GEI access to BOTH source and target orgs.
+# Source org is READ-ONLY — never deleted, transferred, or modified.
+# This creates copies in the target org only; it is not an org ownership transfer.
 #
 # Usage:
 #   ./replicate_github_org.sh \
@@ -32,6 +34,10 @@ CHECKLIST=""
 usage() {
   cat <<'EOF'
 Full-fidelity GitHub org replication (everything GEI can migrate).
+
+Cross-account: one PAT must have GEI access to BOTH source and target orgs.
+Source org is READ-ONLY — never deleted, transferred, or modified.
+This is a copy into the target org, not an org ownership transfer.
 
 Required:
   --source-org ORG    Source organization

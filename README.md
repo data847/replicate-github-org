@@ -25,6 +25,30 @@ cp tokens.example tokens   # add your tokens locally — never commit tokens
 
 `replicate_github_org.sh` copies every repository from a source GitHub org into a target org.
 
+## Cross-account migration
+
+This script is designed for **vendor → LH2** (or any **source org → new target org**) setup where the orgs may live under **different GitHub accounts**.
+
+| Requirement | Detail |
+|-------------|--------|
+| **Two orgs** | Source org (e.g. vendor) and target org (e.g. `VendorOrg-LH2`) must **both already exist** |
+| **One PAT** | A single token must have migration access to **both** orgs (org owner or GitHub Enterprise Importer role on each) |
+| **Cross-account access** | If orgs are under different accounts, the token owner must be granted admin/GEI access on the **source** org (temporary vendor invite is common) |
+| **Not an org transfer** | This **copies** repos into the target org — it does **not** transfer org ownership between accounts |
+
+If the PAT cannot read the source org, the script fails at org verification. If it cannot write to the target org, GEI migrations fail per repo.
+
+### Source org is never modified
+
+The script and GEI are **copy-only**:
+
+- Source org is **never deleted, transferred, or renamed**
+- Source repos are **never deleted or overwritten**
+- No changes to source org settings, teams, billing, or membership
+- Only **reads** from source (list repos, GEI pull) and **writes** to target
+
+After a successful run you have **two orgs**: the original source (unchanged) and a full replica in the target.
+
 ## What gets migrated
 
 - All repositories (including archived and forks)
@@ -52,6 +76,8 @@ cp tokens.example tokens   # add your tokens locally — never commit tokens
 - PAT with access to **both** source and target orgs (org owner or GEI role)
 
 Required token scopes: `repo`, `read:org`, `workflow` (and GEI permissions on both orgs).
+
+> **Cross-account:** Create the target org under the LH2 (or receiving) account first. Ensure whoever runs the script has a PAT with GEI access to **both** orgs. The vendor source org remains untouched.
 
 ## Usage
 
