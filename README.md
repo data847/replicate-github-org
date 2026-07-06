@@ -1,8 +1,29 @@
 # replicate-github-org
 
-Full-fidelity **GitHub organization replication** using [GitHub Enterprise Importer (GEI)](https://docs.github.com/en/migrations/using-github-enterprise-importer).
+Tools for **full-fidelity replication** of vendor code hosting into LH2-owned copies.
 
-Copies every repository from a source org into a target org. The source org is **never modified or deleted**.
+| Script | Platform | Method |
+|--------|----------|--------|
+| `replicate_github_org.sh` | GitHub org | [GitHub Enterprise Importer (GEI)](https://docs.github.com/en/migrations/using-github-enterprise-importer) |
+| `replicate_gitlab_group.py` | GitLab group | Project export → import |
+
+Both scripts are **copy-only**: the source org/group is never modified or deleted. Re-runs are safe and resume from per-project/per-repo state.
+
+---
+
+## Setup
+
+```bash
+git clone https://github.com/data847/replicate-github-org.git
+cd replicate-github-org
+cp tokens.example tokens   # add your tokens locally — never commit tokens
+```
+
+---
+
+# GitHub org replication
+
+`replicate_github_org.sh` copies every repository from a source GitHub org into a target org.
 
 ## What gets migrated
 
@@ -32,7 +53,7 @@ Copies every repository from a source org into a target org. The source org is *
 
 Required token scopes: `repo`, `read:org`, `workflow` (and GEI permissions on both orgs).
 
-## Quick start
+## Usage
 
 ```bash
 ./replicate_github_org.sh \
@@ -50,35 +71,19 @@ Or pass the token directly:
   --target-org SOURCE_ORG-LH2
 ```
 
-## Tokens file format
-
-Copy `tokens.example` to `tokens` and add your PAT. **Do not commit `tokens`.**
-
-```
-github-data-token=ghp_...
-```
+Token key in `tokens`: `github-data-token=ghp_...`
 
 ## Output
 
-Creates a stable work directory:
-
 ```
 org-replica-<source>-to-<target>/
-├── logs/                      # Per-repo GEI logs
-├── state/                     # Per-repo success/failed status
-├── repos.txt                  # All repos discovered
-├── migration-report.csv       # Summary
+├── logs/
+├── state/
+├── repos.txt
+├── migration-report.csv
 ├── migration-report.json
 └── POST_MIGRATION_CHECKLIST.md
 ```
-
-Re-running is **safe**: repos already marked `success` are skipped.
-
-## Notes
-
-- Migrations run **one repo at a time** to avoid GEI queue conflicts
-- States like `PENDING_VALIDATION`, `QUEUED`, `IN_PROGRESS` are normal
-- Large orgs can take many hours
 
 ## Example
 
@@ -88,3 +93,96 @@ Re-running is **safe**: repos already marked `success` are skipped.
   --source-org Gold-Setu \
   --target-org Gold-Setu-LH2
 ```
+
+---
+
+# GitLab group replication
+
+`replicate_gitlab_group.py` copies every project from a source GitLab group into a target group on the same GitLab host.
+
+## What gets migrated
+
+- All projects (including archived, including subgroups)
+- Git repository (branches, tags, commits)
+- Issues and issue comments
+- Merge requests and MR comments
+- Labels, milestones, snippets
+- Wiki and uploads (within GitLab export limits)
+- Git LFS objects (when included in export)
+
+## What does NOT migrate (manual follow-up)
+
+- CI/CD variables and secrets
+- Pipeline run history
+- Container registry and package registry
+- Webhooks, deploy keys, runners
+- Group-level permissions and SAML settings
+
+## Prerequisites
+
+- Python 3.10+ (stdlib only — no pip dependencies)
+- **Target top-level group must already exist** in GitLab UI
+- Token with **Maintainer+** on source projects and target group (`api` scope)
+
+## Usage
+
+```bash
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group source-group \
+  --target-group source-group-lh2
+```
+
+Or pass the token directly:
+
+```bash
+python replicate_gitlab_group.py \
+  --token glpat-... \
+  --source-group my-group \
+  --target-group my-group-lh2 \
+  --gitlab-host gitlab.com
+```
+
+Token keys in `tokens` (first match wins): `gitlab_token`, `data-lh2-legacy-token`, or `data-lh2-gitlab-anurag-dahlia`.
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--gitlab-host` | `gitlab.com` | GitLab hostname or base URL |
+| `--workdir` | `./group-replica-<source>-to-<target>` | Stable work directory |
+| `--poll-seconds` | `15` | Export/import poll interval |
+| `--export-timeout` | `7200` | Per-project export timeout (seconds) |
+| `--import-timeout` | `7200` | Per-project import timeout (seconds) |
+
+## Output
+
+```
+group-replica-<source>-to-<target>/
+├── logs/
+├── state/
+├── exports/
+├── projects.txt
+├── migration-report.csv
+├── migration-report.json
+└── POST_MIGRATION_CHECKLIST.md
+```
+
+Subgroups under the target are created automatically when needed.
+
+## Example
+
+```bash
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group mindspireacademy123-crypto \
+  --target-group mindspireacademy123-crypto-lh2
+```
+
+---
+
+## Notes (both platforms)
+
+- Large orgs/groups can take many hours
+- Re-running skips projects/repos already marked `success`
+- Never commit `tokens` — it is listed in `.gitignore`

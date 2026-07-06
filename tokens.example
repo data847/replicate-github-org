@@ -1,2 +1,9 @@
-# Copy to tokens (never commit tokens) and fill in your PAT.
+# Copy to tokens (never commit tokens) and fill in your credentials.
+
+# GitHub (replicate_github_org.sh)
 github-data-token=ghp_your_token_here
+
+# GitLab (replicate_gitlab_group.py) — script uses the first key found
+gitlab_token=glpat_your_token_here
+# data-lh2-legacy-token=glpat_your_token_here
+# data-lh2-gitlab-anurag-dahlia=glpat_your_token_here
