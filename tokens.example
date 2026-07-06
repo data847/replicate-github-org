@@ -1,0 +1,2 @@
+# Copy to tokens (never commit tokens) and fill in your PAT.
+github-data-token=ghp_your_token_here
