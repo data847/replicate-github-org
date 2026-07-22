@@ -12,6 +12,9 @@
 #     --source-org Gold-Setu \
 #     --target-org Gold-Setu-LH2
 #
+# Optional allowlist:
+#   --repo NAME / --repos-file FILE
+#
 # Re-running is safe: uses a stable work dir and skips repos already marked success.
 # Migrations run one at a time so GEI queue conflicts are avoided.
 #
@@ -21,6 +24,8 @@ SOURCE_ORG=""
 TARGET_ORG=""
 TOKEN=""
 TOKENS_FILE=""
+REPO_SELECTORS=()
+REPOS_LIST_FILE=""
 
 RUN_STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 WORKDIR=""
@@ -47,7 +52,11 @@ Auth (one of):
   --token TOKEN       GitHub PAT with full source + target access
   --tokens-file FILE  File with: github-data-token=ghp_...
 
-Migrates ALL repos (including archived and forks), all branches/tags/commits,
+Optional allowlist (migrate a subset):
+  --repo NAME         Repository name to migrate (repeatable)
+  --repos-file FILE   Text file with one repo name per line (# comments ok)
+
+Migrates ALL repos by default (including archived and forks), all branches/tags/commits,
 issues, PRs, reviews, labels, milestones, releases, wikis, and LFS.
 
 GEI states like PENDING_VALIDATION, QUEUED, and IN_PROGRESS are normal — not errors.
@@ -93,6 +102,8 @@ parse_args() {
       --target-org) TARGET_ORG="$2"; shift 2 ;;
       --token) TOKEN="$2"; shift 2 ;;
       --tokens-file) TOKENS_FILE="$2"; shift 2 ;;
+      --repo) REPO_SELECTORS+=("$2"); shift 2 ;;
+      --repos-file) REPOS_LIST_FILE="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;
     esac
@@ -108,6 +119,10 @@ parse_args() {
       | head -1 | cut -d= -f2- | tr -d '[:space:]')"
   fi
   [[ -n "$TOKEN" ]] || die "Provide --token or --tokens-file with github-data-token="
+
+  if [[ -n "$REPOS_LIST_FILE" ]]; then
+    [[ -f "$REPOS_LIST_FILE" ]] || die "Repos file not found: $REPOS_LIST_FILE"
+  fi
 }
 
 require_cmd() {
@@ -162,6 +177,57 @@ verify_orgs() {
     || die "Cannot access target org '${TARGET_ORG}'. Create it first: https://github.com/account/organizations/new"
 }
 
+apply_repo_filter() {
+  local discovered_count selected_count
+  discovered_count="$(wc -l < "$REPOS_FILE" | tr -d ' ')"
+
+  if [[ ${#REPO_SELECTORS[@]} -eq 0 && -z "$REPOS_LIST_FILE" ]]; then
+    log "INFO" "Found ${discovered_count} repositories — all will be migrated"
+    return 0
+  fi
+
+  local tmp_selected tmp_wanted
+  tmp_selected="$(mktemp)"
+  tmp_wanted="$(mktemp)"
+  : > "$tmp_wanted"
+
+  local repo
+  for repo in "${REPO_SELECTORS[@]+"${REPO_SELECTORS[@]}"}"; do
+    repo="$(echo "$repo" | sed -E 's#.*/##; s/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [[ -n "$repo" ]] && echo "$repo" >> "$tmp_wanted"
+  done
+
+  if [[ -n "$REPOS_LIST_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      line="$(echo "$line" | sed -E 's#.*/##')"
+      echo "$line" >> "$tmp_wanted"
+    done < "$REPOS_LIST_FILE"
+  fi
+
+  sort -u "$tmp_wanted" -o "$tmp_wanted"
+  : > "$tmp_selected"
+
+  local missing=0
+  while IFS= read -r repo || [[ -n "$repo" ]]; do
+    [[ -z "$repo" ]] && continue
+    if grep -Fxq "$repo" "$REPOS_FILE"; then
+      echo "$repo" >> "$tmp_selected"
+    else
+      log "ERROR" "Selected repository not found in ${SOURCE_ORG}: ${repo}"
+      missing=$((missing + 1))
+    fi
+  done < "$tmp_wanted"
+
+  [[ "$missing" -eq 0 ]] || die "${missing} selected repo(s) not found in ${SOURCE_ORG}"
+  sort -u "$tmp_selected" -o "$REPOS_FILE"
+  selected_count="$(wc -l < "$REPOS_FILE" | tr -d ' ')"
+  [[ "$selected_count" -gt 0 ]] || die "Repo filter matched zero repositories"
+  log "INFO" "Repo filter active: migrating ${selected_count}/${discovered_count} repositories"
+  rm -f "$tmp_selected" "$tmp_wanted"
+}
+
 list_all_repos() {
   log "INFO" "Listing ALL repositories in ${SOURCE_ORG} (including archived)"
   : > "$REPOS_FILE"
@@ -177,8 +243,8 @@ list_all_repos() {
   sort -u "$REPOS_FILE" -o "$REPOS_FILE"
   local total
   total="$(wc -l < "$REPOS_FILE" | tr -d ' ')"
-  log "INFO" "Found ${total} repositories — all will be migrated"
   [[ "$total" -gt 0 ]] || die "No repositories found in ${SOURCE_ORG}"
+  apply_repo_filter
 }
 
 state_file() { echo "${STATE_DIR}/$1.status"; }

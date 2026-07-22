@@ -6,8 +6,11 @@ Tools for **full-fidelity replication** of vendor code hosting into LH2-owned co
 |--------|----------|--------|
 | `replicate_github_org.sh` | GitHub org | [GitHub Enterprise Importer (GEI)](https://docs.github.com/en/migrations/using-github-enterprise-importer) |
 | `replicate_gitlab_group.py` | GitLab group | Project export → import |
+| `replicate_bitbucket_workspace.py` | Bitbucket Cloud workspace | API create + `git clone --mirror` / `git push --mirror` |
 
-Both scripts are **copy-only**: the source org/group is never modified or deleted. Re-runs are safe and resume from per-project/per-repo state.
+All scripts are **copy-only**: the source org/group/workspace is never modified or deleted. Re-runs are safe and resume from per-project/per-repo state.
+
+> **Bitbucket fidelity note:** Bitbucket Cloud has no GEI/export-import equivalent. The Bitbucket script copies **git history (+ LFS/wiki when available)** and recreates projects/repos. Pull requests, issues, pipelines, and permissions are **not** migrated automatically.
 
 ---
 
@@ -97,6 +100,28 @@ Or pass the token directly:
   --target-org SOURCE_ORG-LH2
 ```
 
+Migrate a subset with CLI flags or a text file:
+
+```bash
+./replicate_github_org.sh \
+  --tokens-file tokens \
+  --source-org SOURCE_ORG \
+  --target-org SOURCE_ORG-LH2 \
+  --repo api \
+  --repo web \
+  --repos-file selected-repos.txt
+```
+
+`selected-repos.txt` example:
+
+```
+# one repo name per line
+api
+web
+# org/repo also accepted — org prefix is ignored
+SOURCE_ORG/mobile
+```
+
 Token key in `tokens`: `github-data-token=ghp_...`
 
 ## Output
@@ -124,7 +149,9 @@ org-replica-<source>-to-<target>/
 
 # GitLab group replication
 
-`replicate_gitlab_group.py` copies every project from a source GitLab group into a target group on the same GitLab host.
+`replicate_gitlab_group.py` copies every project from a source GitLab group into a target group on the same GitLab host (**gitlab.com or self-hosted**).
+
+For Cursor/Claude usage notes on self-hosted instances, see [`SELF_HOSTED_GITLAB.md`](./SELF_HOSTED_GITLAB.md).
 
 ## What gets migrated
 
@@ -149,6 +176,7 @@ org-replica-<source>-to-<target>/
 - Python 3.10+ (stdlib only — no pip dependencies)
 - **Target top-level group must already exist** in GitLab UI
 - Token with **Maintainer+** on source projects and target group (`api` scope)
+- For self-hosted: network reachability to the GitLab API (`/api/v4`)
 
 ## Usage
 
@@ -169,13 +197,75 @@ python replicate_gitlab_group.py \
   --gitlab-host gitlab.com
 ```
 
-Token keys in `tokens` (first match wins): `gitlab_token`, `data-lh2-legacy-token`, or `data-lh2-gitlab-anurag-dahlia`.
+### Self-hosted GitLab
+
+`--gitlab-host` accepts a hostname or full base URL (http/https), including installs under a subpath:
+
+```bash
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group vendor-group \
+  --target-group vendor-group-lh2 \
+  --gitlab-host https://gitlab.internal.company.com
+
+# custom path prefix
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group vendor-group \
+  --target-group vendor-group-lh2 \
+  --gitlab-host https://company.com/gitlab
+
+# self-signed / private CA certificate
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group vendor-group \
+  --target-group vendor-group-lh2 \
+  --gitlab-host https://gitlab.internal.company.com \
+  --insecure
+```
+
+### Migrate selected projects only
+
+Use repeatable `--project` and/or `--projects-file` (one path per line, `#` comments allowed).
+Paths may be full `path_with_namespace` or relative to `--source-group`.
+
+```bash
+python replicate_gitlab_group.py \
+  --tokens-file tokens \
+  --source-group techweirdo1 \
+  --target-group techweirdo1-lh2 \
+  --project techweirdo1/naik-wealth/nw-backend-api \
+  --project naik-wealth/nw-frontend \
+  --projects-file remaining-projects.txt
+```
+
+`remaining-projects.txt` example:
+
+```
+# full path or relative to source group
+techweirdo1/school
+pitchlink
+rethink-labs/competitions-backend
+```
+
+Token keys in `tokens` (first match wins): `gitlab_token`, `data-lh2-token-gitlab`, `data-lh2-legacy-token`, or `data-lh2-gitlab-anurag-dahlia`.
+
+### Safety / existing target content
+
+- Existing target subgroups and projects are **never deleted or overwritten**
+- Missing subgroups are created; existing ones are reused
+- Missing projects are imported with `overwrite=false`
+- Extra subgroups/projects already on target are **kept**
+- After migration, `hierarchy-verify.csv` checks every source group/subgroup/project mapping (scoped to selected projects when a filter is used)
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--gitlab-host` | `gitlab.com` | GitLab hostname or base URL |
+| `--gitlab-host` | `gitlab.com` | Hostname or base URL (`https://gitlab.example.com`, `https://host/gitlab`, or `.../api/v4`) |
+| `--insecure` | off | Skip TLS certificate verification (self-signed / private CA) |
+| `--project PATH` | — | Project allowlist entry (repeatable) |
+| `--projects-file FILE` | — | Text file allowlist (one project path per line) |
 | `--workdir` | `./group-replica-<source>-to-<target>` | Stable work directory |
 | `--poll-seconds` | `15` | Export/import poll interval |
 | `--export-timeout` | `7200` | Per-project export timeout (seconds) |
@@ -207,8 +297,130 @@ python replicate_gitlab_group.py \
 
 ---
 
-## Notes (both platforms)
+# Bitbucket Cloud workspace replication
 
-- Large orgs/groups can take many hours
+`replicate_bitbucket_workspace.py` copies every repository from a source Bitbucket Cloud workspace into a target workspace.
+
+Because Bitbucket has no full-fidelity importer, this uses:
+
+1. REST API to create missing **projects** and empty **repositories**
+2. `git clone --mirror` from source + `git push --mirror` to target
+3. Optional Git LFS fetch/push and wiki mirror
+
+### Source workspace is never modified
+
+- Source workspace is **never deleted, transferred, or renamed**
+- Source repos are **never deleted or overwritten**
+- Only **reads** from source and **writes** to target
+
+## What gets migrated
+
+- All repositories (branches, tags, commits)
+- Git LFS objects (when `git-lfs` is installed)
+- Projects in the target workspace (created when missing)
+- Basic repo shell settings (private flag, description, fork policy, issues/wiki flags)
+- Wiki git content when present and cloneable
+
+## What does NOT migrate (manual follow-up)
+
+- Pull requests, PR comments, approvals
+- Issues and issue comments
+- Pipelines / CI history, variables, deployments
+- Branch permissions, merge checks, branching model
+- Webhooks, deploy keys, access tokens
+- Downloads and package/container registries
+- Workspace members, groups, and permissions
+
+## Prerequisites
+
+- Python 3.10+ (stdlib only — no pip dependencies)
+- `git` (and ideally `git-lfs`)
+- **Target workspace must already exist** in Bitbucket UI
+- API token with access to **both** workspaces
+
+Recommended API token scopes:
+
+- `read:repository:bitbucket`, `write:repository:bitbucket`
+- project create/admin scopes needed to recreate projects
+- wiki read/write if you want wiki mirrors
+
+Auth uses Atlassian **email + API token** (Basic) for REST, and
+`x-bitbucket-api-token-auth` for git HTTPS.
+
+## Usage
+
+```bash
+python replicate_bitbucket_workspace.py \
+  --tokens-file tokens \
+  --source-workspace SOURCE_WS \
+  --target-workspace SOURCE_WS-lh2
+```
+
+Or pass credentials directly:
+
+```bash
+python replicate_bitbucket_workspace.py \
+  --email you@company.com \
+  --token ATATT3x... \
+  --source-workspace SOURCE_WS \
+  --target-workspace SOURCE_WS-lh2
+```
+
+Migrate a subset:
+
+```bash
+python replicate_bitbucket_workspace.py \
+  --tokens-file tokens \
+  --source-workspace SOURCE_WS \
+  --target-workspace SOURCE_WS-lh2 \
+  --repo api \
+  --repo web \
+  --repos-file selected-repos.txt
+```
+
+Token keys in `tokens`:
+
+```
+bitbucket_token=ATATT3x...
+bitbucket_email=you@company.com
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--repo SLUG` | — | Repo allowlist entry (repeatable) |
+| `--repos-file FILE` | — | Text file allowlist (one repo slug per line) |
+| `--workdir` | `./workspace-replica-<source>-to-<target>` | Stable work directory |
+| `--keep-mirrors` | off | Keep local mirror clones under `workdir/mirrors/` |
+| `--skip-wiki` | off | Do not attempt wiki git mirrors |
+
+## Output
+
+```
+workspace-replica-<source>-to-<target>/
+├── logs/
+├── state/
+├── mirrors/          # only if --keep-mirrors
+├── repos.txt
+├── migration-report.csv
+├── migration-report.json
+└── POST_MIGRATION_CHECKLIST.md
+```
+
+## Example
+
+```bash
+python replicate_bitbucket_workspace.py \
+  --tokens-file tokens \
+  --source-workspace acme-engineering \
+  --target-workspace acme-engineering-lh2
+```
+
+---
+
+## Notes (all platforms)
+
+- Large orgs/groups/workspaces can take many hours
 - Re-running skips projects/repos already marked `success`
 - Never commit `tokens` — it is listed in `.gitignore`

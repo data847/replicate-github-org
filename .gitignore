@@ -1,1 +1,4 @@
 tokens
+group-replica-*/
+org-replica-*/
+workspace-replica-*/

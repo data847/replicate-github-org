@@ -7,3 +7,10 @@ github-data-token=ghp_your_token_here
 gitlab_token=glpat_your_token_here
 # data-lh2-legacy-token=glpat_your_token_here
 # data-lh2-gitlab-anurag-dahlia=glpat_your_token_here
+
+# Bitbucket Cloud (replicate_bitbucket_workspace.py)
+# Create an API token with scopes: read/write repository + project (and wiki if needed).
+# Use Atlassian account email for REST Basic auth.
+bitbucket_token=ATATT3x_your_token_here
+bitbucket_email=you@company.com
+# bitbucket_username=your_bitbucket_username
